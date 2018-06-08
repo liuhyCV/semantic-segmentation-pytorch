@@ -10,6 +10,14 @@ import torch
 import torch.nn as nn
 # Our libs
 from dataset import TrainDataset
+from dataset_voc import VOC_TrainDataset
+from data import voc
+import torchvision.transforms as standard_transforms
+import torchvision.utils as vutils
+
+from config import config
+
+
 from models import ModelBuilder, SegmentationModule
 from utils import AverageMeter
 from lib.nn import UserScatteredDataParallel, user_scattered_collate, patch_replication_callback
@@ -153,7 +161,7 @@ def main(args):
         num_class=args.num_class,
         weights=args.weights_decoder)
 
-    crit = nn.NLLLoss(ignore_index=-1)
+    crit = nn.NLLLoss(ignore_index=255)
 
     if args.arch_decoder.endswith('deepsup'):
         segmentation_module = SegmentationModule(
@@ -163,8 +171,11 @@ def main(args):
             net_encoder, net_decoder, crit)
 
     # Dataset and Loader
-    dataset_train = TrainDataset(
-        args.list_train, args, batch_per_gpu=args.batch_size_per_gpu)
+    # dataset_train = TrainDataset(
+    #     args.list_train, args, batch_per_gpu=args.batch_size_per_gpu)
+    # dataset_train = voc.TrainDataset_VOC(dataset_root=config.img_root_folder, mode='train', transform=input_transform)
+    dataset_train = VOC_TrainDataset(
+        list_train=config.train_source, opt=args, batch_per_gpu=args.batch_size_per_gpu)
 
     loader_train = torchdata.DataLoader(
         dataset_train,
@@ -185,6 +196,10 @@ def main(args):
         segmentation_module = UserScatteredDataParallel(
             segmentation_module,
             device_ids=range(args.num_gpus))
+        # segmentation_module = UserScatteredDataParallel(
+        #     segmentation_module,
+        #     device_ids=[0,3,4,5])
+
         # For sync bn
         patch_replication_callback(segmentation_module)
     segmentation_module.cuda()
@@ -225,12 +240,18 @@ if __name__ == '__main__':
                         help='number of features between encoder and decoder')
 
     # Path related arguments
+    # parser.add_argument('--list_train',
+    #                     default='./data/train.odgt')
+    # parser.add_argument('--list_val',
+    #                     default='./data/validation.odgt')
+    # parser.add_argument('--root_dataset',
+    #                     default='./data/')
     parser.add_argument('--list_train',
-                        default='./data/train.odgt')
+                        default=config.train_source)
     parser.add_argument('--list_val',
-                        default='./data/validation.odgt')
+                        default=config.eval_source)
     parser.add_argument('--root_dataset',
-                        default='./data/')
+                        default=config.img_root_folder)
 
     # optimization related arguments
     parser.add_argument('--num_gpus', default=8, type=int,
@@ -258,7 +279,7 @@ if __name__ == '__main__':
                         help='fix bn params')
 
     # Data related arguments
-    parser.add_argument('--num_class', default=150, type=int,
+    parser.add_argument('--num_class', default=21, type=int,
                         help='number of classes')
     parser.add_argument('--workers', default=16, type=int,
                         help='number of data loading workers')
