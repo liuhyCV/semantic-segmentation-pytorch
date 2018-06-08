@@ -79,7 +79,7 @@ def train(segmentation_module, iterator, optimizers, history, epoch, args):
         adjust_learning_rate(optimizers, cur_iter, args)
 
 
-def checkpoint(nets, history, args, epoch_num):
+def checkpoint(nets, optimizers, history, args, epoch_num):
     print('Saving checkpoints...')
     (net_encoder, net_decoder, crit) = nets
     suffix_latest = 'epoch_{}.pth'.format(epoch_num)
@@ -96,6 +96,17 @@ def checkpoint(nets, history, args, epoch_num):
                '{}/encoder_{}'.format(args.ckpt, suffix_latest))
     torch.save(dict_decoder,
                '{}/decoder_{}'.format(args.ckpt, suffix_latest))
+
+    # save last checkpoint for resume training
+    torch.save(history,
+               '{}/history_{}'.format(args.ckpt, 'epoch_last.pth'))
+    torch.save(dict_encoder,
+               '{}/encoder_{}'.format(args.ckpt, 'epoch_last.pth'))
+    torch.save(dict_decoder,
+               '{}/decoder_{}'.format(args.ckpt, 'epoch_last.pth'))
+    torch.save({'encoder_optimizer':optimizers[0], 'decoder_optimizer':optimizers[1]},
+               '{}/optimizers_{}'.format(args.ckpt, 'epoch_last.pth'))
+
 
 
 def group_weight(module):
@@ -133,6 +144,7 @@ def create_optimizers(nets, args):
         lr=args.lr_decoder,
         momentum=args.beta1,
         weight_decay=args.weight_decay)
+
     return (optimizer_encoder, optimizer_decoder)
 
 
@@ -204,9 +216,36 @@ def main(args):
         patch_replication_callback(segmentation_module)
     segmentation_module.cuda()
 
+
     # Set up optimizers
     nets = (net_encoder, net_decoder, crit)
     optimizers = create_optimizers(nets, args)
+
+    if args.resume:
+        file_path_history = '{}/history_{}'.format(args.ckpt, 'epoch_last.pth')
+        file_path_encoder = '{}/encoder_{}'.format(args.ckpt, 'epoch_last.pth')
+        file_path_decoder = '{}/decoder_{}'.format(args.ckpt, 'epoch_last.pth')
+        file_path_optimizers = '{}/optimizers_{}'.format(args.ckpt, 'epoch_last.pth')
+
+        if os.path.isfile(file_path_history):
+            print("=> loading checkpoint '{}'".format(file_path_history))
+            checkpoint_history = torch.load(file_path_history)
+            checkpoint_encoder = torch.load(file_path_encoder)
+            checkpoint_decoder = torch.load(file_path_decoder)
+            checkpoint_optimizers = torch.load(file_path_optimizers)
+
+            args.start_epoch = int(checkpoint_history['train']['epoch'][0]) + 1
+
+            nets[0].load_state_dict(checkpoint_encoder)
+            nets[1].load_state_dict(checkpoint_decoder)
+
+            optimizers[0].load_state_dict(checkpoint_optimizers['encoder_optimizer'])
+            optimizers[1].load_state_dict(checkpoint_optimizers['decoder_optimizer'])
+
+            print("=> start train epoch {}".format(args.start_epoch))
+        else:
+            print('resume not find epoch-last checkpoint')
+
 
     # Main loop
     history = {'train': {'epoch': [], 'loss': [], 'acc': []}}
@@ -215,7 +254,7 @@ def main(args):
         train(segmentation_module, iterator_train, optimizers, history, epoch, args)
 
         # checkpointing
-        checkpoint(nets, history, args, epoch)
+        checkpoint(nets, optimizers, history, args, epoch)
 
     print('Training Done!')
 
@@ -254,6 +293,8 @@ if __name__ == '__main__':
                         default=config.img_root_folder)
 
     # optimization related arguments
+    parser.add_argument('--resume', default=True, type=bool,
+                        help='resume training')
     parser.add_argument('--num_gpus', default=8, type=int,
                         help='number of gpus to use')
     parser.add_argument('--batch_size_per_gpu', default=2, type=int,

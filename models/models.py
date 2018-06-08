@@ -447,6 +447,136 @@ class PPMBilinearDeepsup(nn.Module):
         return (x, _)
 
 
+
+# Add Spatial Propagation Networks
+# SPN and Semantic segmentation are sharing encoder and pyramid pooling network
+class SPN_PPMBilinearDeepsup(nn.Module):
+    def __init__(self, num_class=150, fc_dim=4096,
+                 use_softmax=False, pool_scales=(1, 2, 3, 6)):
+        super(SPN_PPMBilinearDeepsup, self).__init__()
+        self.use_softmax = use_softmax
+
+        self.ppm = []
+        for scale in pool_scales:
+            self.ppm.append(nn.Sequential(
+                nn.AdaptiveAvgPool2d(scale),
+                nn.Conv2d(fc_dim, 512, kernel_size=1, bias=False),
+                SynchronizedBatchNorm2d(512),
+                nn.ReLU(inplace=True)
+            ))
+        self.ppm = nn.ModuleList(self.ppm)
+
+        self.conv_last = nn.Sequential(
+            nn.Conv2d(fc_dim+len(pool_scales)*512, 512,
+                      kernel_size=3, padding=1, bias=False),
+            SynchronizedBatchNorm2d(512),
+            nn.ReLU(inplace=True),
+            nn.Dropout2d(0.1),
+            nn.Conv2d(512, num_class, kernel_size=1)
+        )
+
+        self.cbr_guidance = conv3x3_bn_relu(fc_dim // 2, fc_dim // 4, 1)
+        self.dropout_guidance = nn.Dropout2d(0.1)
+
+        self.conv_last_guidance = nn.Conv2d(fc_dim // 4, num_class*12, 1, 1, 0)
+
+        # spn model:
+        # Input: score map + guidance network output
+        # Output: refined map
+        # score map: N*W*H*Class
+        # guidance network output: N*W*H*(21*12=252)
+
+        self.propagator_l2r = GateRecurrent2dnoind(True, False) # left->right
+        self.propagator_r2l = GateRecurrent2dnoind(True, True) # right->left
+        self.propagator_t2b = GateRecurrent2dnoind(False, False) # top->bottom
+        self.propagator_b2t = GateRecurrent2dnoind(False, True) # bottom->top
+
+        self.conv_spn = nn.Sequential(
+            nn.Conv2d(fc_dim+len(pool_scales)*512, 512,
+                      kernel_size=3, padding=1, bias=False),
+            SynchronizedBatchNorm2d(512),
+            nn.ReLU(inplace=True),
+            nn.Dropout2d(0.1),
+            nn.Conv2d(512, num_class, kernel_size=1)
+        )
+
+    def _spn_onc_direction(self, intput_score_map, spn_weight, direction=''):
+        G1 = spn_weight[0]
+        G2 = spn_weight[1]
+        G3 = spn_weight[2]
+
+        sum_abs = G1.abs() + G2.abs() + G3.abs()
+        mask_need_norm = sum_abs.ge(1)
+        mask_need_norm = mask_need_norm.float()
+        G1_norm = torch.div(G1, sum_abs)
+        G2_norm = torch.div(G2, sum_abs)
+        G3_norm = torch.div(G3, sum_abs)
+
+        G1 = torch.add(-mask_need_norm, 1) * G1 + mask_need_norm * G1_norm
+        G2 = torch.add(-mask_need_norm, 1) * G2 + mask_need_norm * G2_norm
+        G3 = torch.add(-mask_need_norm, 1) * G3 + mask_need_norm * G3_norm
+
+        if direction == 'left2right':
+            return self.propagator_l2r.forward(intput_score_map, G1, G2, G3)
+        elif direction == 'right2left':
+            return self.propagator_r2l.forward(intput_score_map, G1, G2, G3)
+        elif direction == 'top2bottom':
+            return self.propagator_t2b.forward(intput_score_map, G1, G2, G3)
+        elif direction == 'bottom2top':
+            return self.propagator_b2t.forward(intput_score_map, G1, G2, G3)
+
+
+    def _spn_module(self, intput_score_map, spn_weight):
+
+        split_spn_weight = torch.split(spn_weight, 12, dim=1)
+
+        spn_output_l2r = _spn_onc_direction(intput_score_map, split_spn_weight[0:3])
+        spn_output_r2l = _spn_onc_direction(intput_score_map, split_spn_weight[3:6])
+        spn_output_t2b = _spn_onc_direction(intput_score_map, split_spn_weight[6:9])
+        spn_output_b2t = _spn_onc_direction(intput_score_map, split_spn_weight[9:12])
+
+        spn_output = torch.max(torch.max(torch.max(spn_output_l2r, spn_output_r2l), spn_output_t2b), spn_output_b2t)
+
+        return spn_output
+
+
+
+    def forward(self, conv_out, segSize=None):
+        conv5 = conv_out[-1]
+
+        input_size = conv5.size()
+        ppm_out = [conv5]
+        for pool_scale in self.ppm:
+            ppm_out.append(nn.functional.upsample(
+                pool_scale(conv5),
+                (input_size[2], input_size[3]),
+                mode='bilinear', align_corners=False))
+        ppm_out = torch.cat(ppm_out, 1)
+
+        x = self.conv_last(ppm_out)
+
+        if self.use_softmax:  # is True during inference
+            x = nn.functional.upsample(
+                x, size=segSize, mode='bilinear', align_corners=False)
+            x = nn.functional.softmax(x, dim=1)
+            return x
+
+        # guidance network
+        conv4 = conv_out[-2]
+        spn_weight = self.cbr_guidance(conv4)
+        spn_weight = self.dropout_guidance(spn_weight)
+        spn_weight = self.conv_last_guidance(spn_weight)
+
+        # spatial propagation module
+        x_spn = _spn_module(x, spn_weight)
+
+        x = nn.functional.log_softmax(x, dim=1)
+        x_spn = nn.functional.log_softmax(x_spn, dim=1)
+
+        return (x, x_spn)
+
+
+
 # upernet
 class UPerNet(nn.Module):
     def __init__(self, num_class=150, fc_dim=4096,
