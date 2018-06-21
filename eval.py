@@ -9,7 +9,7 @@ import torch
 import torch.nn as nn
 from scipy.io import loadmat
 # Our libs
-from dataset import ValDataset
+from dataset_voc import VOC_ValDataset
 from models import ModelBuilder, SegmentationModule
 from utils import AverageMeter, colorEncode, accuracy, intersectionAndUnion
 from lib.nn import user_scattered_collate, async_copy_to
@@ -17,6 +17,7 @@ from lib.utils import as_numpy, mark_volatile
 import lib.utils.data as torchdata
 import cv2
 
+from config import config
 
 def visualize_result(data, preds, args):
     colors = loadmat('data/color150.mat')['colors']
@@ -34,7 +35,7 @@ def visualize_result(data, preds, args):
 
     img_name = info.split('/')[-1]
     cv2.imwrite(os.path.join(args.result,
-                img_name.replace('.jpg', '.png')), im_vis)
+                img_name.replace('.jpg', '.png')+'.png'), im_vis)
 
 
 def evaluate(segmentation_module, loader, args):
@@ -80,6 +81,8 @@ def evaluate(segmentation_module, loader, args):
                       i, acc))
 
         # visualization
+        # print('seg_label', np.unique(seg_label))
+        # print('preds', np.unique(preds))
         if args.visualize:
             visualize_result(
                 (batch_data['img_ori'], seg_label, batch_data['info']),
@@ -110,13 +113,12 @@ def main(args):
         weights=args.weights_decoder,
         use_softmax=True)
 
-    crit = nn.NLLLoss(ignore_index=-1)
+    crit = nn.NLLLoss(ignore_index=255)
 
     segmentation_module = SegmentationModule(net_encoder, net_decoder, crit)
 
     # Dataset and Loader
-    dataset_val = ValDataset(
-        args.list_val, args, max_sample=args.num_val)
+    dataset_val = VOC_ValDataset(args, max_sample=args.num_val)
     loader_val = torchdata.DataLoader(
         dataset_val,
         batch_size=args.batch_size,
@@ -151,15 +153,22 @@ if __name__ == '__main__':
                         help='number of features between encoder and decoder')
 
     # Path related arguments
+    # parser.add_argument('--list_val',
+    #                     default='./data/validation.odgt')
+    # parser.add_argument('--root_dataset',
+    #                     default='./data/')
+    parser.add_argument('--list_train',
+                        default=config.train_source)
     parser.add_argument('--list_val',
-                        default='./data/validation.odgt')
+                        default=config.eval_source)
     parser.add_argument('--root_dataset',
-                        default='./data/')
+                        default=config.img_root_folder)
+
 
     # Data related arguments
     parser.add_argument('--num_val', default=-1, type=int,
                         help='number of images to evalutate')
-    parser.add_argument('--num_class', default=150, type=int,
+    parser.add_argument('--num_class', default=21, type=int,
                         help='number of classes')
     parser.add_argument('--batch_size', default=1, type=int,
                         help='batchsize. current only supports 1')
@@ -174,7 +183,7 @@ if __name__ == '__main__':
     # Misc arguments
     parser.add_argument('--ckpt', default='./ckpt',
                         help='folder to output checkpoints')
-    parser.add_argument('--visualize', action='store_true',
+    parser.add_argument('--visualize', action='store_false',
                         help='output visualization?')
     parser.add_argument('--result', default='./result',
                         help='folder to output visualization results')

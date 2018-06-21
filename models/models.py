@@ -123,7 +123,7 @@ class ModelBuilder():
         return net_encoder
 
     def build_decoder(self, arch='ppm_bilinear_deepsup',
-                      fc_dim=512, num_class=150,
+                      fc_dim=512, num_class=21,
                       weights='', use_softmax=False):
         if arch == 'c1_bilinear_deepsup':
             net_decoder = C1BilinearDeepSup(
@@ -339,7 +339,7 @@ class C1Bilinear(nn.Module):
 
 # pyramid pooling, bilinear upsample
 class PPMBilinear(nn.Module):
-    def __init__(self, num_class=150, fc_dim=4096,
+    def __init__(self, num_class=21, fc_dim=4096,
                  use_softmax=False, pool_scales=(1, 2, 3, 6)):
         super(PPMBilinear, self).__init__()
         self.use_softmax = use_softmax
@@ -388,7 +388,7 @@ class PPMBilinear(nn.Module):
 
 # pyramid pooling, bilinear upsample
 class PPMBilinearDeepsup(nn.Module):
-    def __init__(self, num_class=150, fc_dim=4096,
+    def __init__(self, num_class=21, fc_dim=4096,
                  use_softmax=False, pool_scales=(1, 2, 3, 6)):
         super(PPMBilinearDeepsup, self).__init__()
         self.use_softmax = use_softmax

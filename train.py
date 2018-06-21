@@ -186,8 +186,7 @@ def main(args):
     # dataset_train = TrainDataset(
     #     args.list_train, args, batch_per_gpu=args.batch_size_per_gpu)
     # dataset_train = voc.TrainDataset_VOC(dataset_root=config.img_root_folder, mode='train', transform=input_transform)
-    dataset_train = VOC_TrainDataset(
-        list_train=config.train_source, opt=args, batch_per_gpu=args.batch_size_per_gpu)
+    dataset_train = VOC_TrainDataset(opt=args, batch_per_gpu=args.batch_size_per_gpu)
 
     loader_train = torchdata.DataLoader(
         dataset_train,

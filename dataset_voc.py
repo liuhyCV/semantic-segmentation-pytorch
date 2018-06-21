@@ -20,7 +20,7 @@ def round2nearest_multiple(x, p):
     return ((x - 1) // p + 1) * p
 
 class VOC_TrainDataset(torchdata.Dataset):
-    def __init__(self, list_train, opt, max_sample=-1, batch_per_gpu=1):
+    def __init__(self, opt, max_sample=-1, batch_per_gpu=1):
         self.root_dataset = opt.root_dataset
         self.imgSize = opt.imgSize
         self.cropSize = 512
@@ -256,7 +256,7 @@ class VOC_TrainDataset(torchdata.Dataset):
 
 
 class VOC_ValDataset(torchdata.Dataset):
-    def __init__(self, odgt, opt, max_sample=-1, start_idx=-1, end_idx=-1):
+    def __init__(self, opt, max_sample=-1, start_idx=-1, end_idx=-1):
         self.root_dataset = opt.root_dataset
         self.imgSize = opt.imgSize
         self.imgMaxSize = opt.imgMaxSize
@@ -268,61 +268,96 @@ class VOC_ValDataset(torchdata.Dataset):
             transforms.Normalize(mean=[102.9801, 115.9465, 122.7717], std=[1., 1., 1.])
             ])
 
-        self.list_sample = [json.loads(x.rstrip()) for x in open(odgt, 'r')]
+        # self.list_sample = [json.loads(x.rstrip()) for x in open(odgt, 'r')]
+        #
+        # if max_sample > 0:
+        #     self.list_sample = self.list_sample[0:max_sample]
+        #
+        # if start_idx >= 0 and end_idx >= 0: # divide file list
+        #     self.list_sample = self.list_sample[start_idx:end_idx]
+        #
+        # self.num_sample = len(self.list_sample)
+        # assert self.num_sample > 0
+        # print('# samples: {}'.format(self.num_sample))
 
+        # self.list_sample = [json.loads(x.rstrip()) for x in open(odgt, 'r')]
+        self.list_images = []
+        self.list_masks = []
+
+        self._image_dir = os.path.join(self.root_dataset, 'images')
+        self._mask_dir = os.path.join(self.root_dataset, 'SegmentationClass')
+
+        # train/val/test splits are pre-cut
+        _splits_dir = os.path.join(self.root_dataset, 'ImageSets/Segmentation')
+        _split_f = os.path.join(_splits_dir, 'val.txt')
+
+        with open(os.path.join(_split_f), "r") as lines:
+            for line in lines:
+                _image = os.path.join(self._image_dir, line.rstrip('\n')+".jpg")
+                assert os.path.isfile(_image)
+
+                self.list_images.append(line.rstrip('\n'))
+
+                # _mask = os.path.join(_mask_dir, line.rstrip('\n')+".png")
+                # assert os.path.isfile(_mask)
+                # self.list_masks.append(_mask)
+
+        self.if_shuffled = False
         if max_sample > 0:
-            self.list_sample = self.list_sample[0:max_sample]
+            self.list_images = self.list_images[0:max_sample]
+            # self.list_masks = self.list_masks[0:max_sample]
 
-        if start_idx >= 0 and end_idx >= 0: # divide file list
-            self.list_sample = self.list_sample[start_idx:end_idx]
-
-        self.num_sample = len(self.list_sample)
+        self.num_sample = len(self.list_images)
         assert self.num_sample > 0
         print('# samples: {}'.format(self.num_sample))
 
+
     def __getitem__(self, index):
-        this_record = self.list_sample[index]
+        this_record = self.list_images[index]
         # load image and label
-        image_path = os.path.join(self.root_dataset, this_record['fpath_img'])
-        segm_path = os.path.join(self.root_dataset, this_record['fpath_segm'])
+        image_path = os.path.join(self._image_dir, this_record + ".jpg")
+        label_path = os.path.join(self._mask_dir, this_record + ".png")
+
+        # image_path = os.path.join(self.root_dataset, this_record['fpath_img'])
+        # segm_path = os.path.join(self.root_dataset, this_record['fpath_segm'])
         img = imread(image_path, mode='RGB')
         img = img[:, :, ::-1] # BGR to RGB!!!
-        segm = imread(segm_path)
+        segm = imread(label_path)
 
-        ori_height, ori_width, _ = img.shape
+        # ori_height, ori_width, _ = img.shape
 
-        img_resized_list = []
+        img_list = []
         for this_short_size in self.imgSize:
             # calculate target height and width
-            scale = min(this_short_size / float(min(ori_height, ori_width)),
-                    self.imgMaxSize / float(max(ori_height, ori_width)))
-            target_height, target_width = int(ori_height * scale), int(ori_width * scale)
-
-            # to avoid rounding in network
-            target_height = round2nearest_multiple(target_height, self.padding_constant)
-            target_width = round2nearest_multiple(target_width, self.padding_constant)
-
-            # resize
-            img_resized = cv2.resize(img.copy(), (target_width, target_height))
+            # scale = min(this_short_size / float(min(ori_height, ori_width)),
+            #         self.imgMaxSize / float(max(ori_height, ori_width)))
+            # target_height, target_width = int(ori_height * scale), int(ori_width * scale)
+            #
+            # # to avoid rounding in network
+            # target_height = round2nearest_multiple(target_height, self.padding_constant)
+            # target_width = round2nearest_multiple(target_width, self.padding_constant)
+            #
+            # # resize
+            # img_resized = cv2.resize(img.copy(), (target_width, target_height))
 
             # image to float
-            img_resized = img_resized.astype(np.float32)
-            img_resized = img_resized.transpose((2, 0, 1))
-            img_resized = self.img_transform(torch.from_numpy(img_resized))
+            img_transform = img.astype(np.float32)
+            img_transform = img_transform.transpose((2, 0, 1))
+            img_transform = self.img_transform(torch.from_numpy(img_transform))
 
-            img_resized = torch.unsqueeze(img_resized, 0)
-            img_resized_list.append(img_resized)
+            img_transform = torch.unsqueeze(img_transform, 0)
+            img_list.append(img_transform)
 
         segm = torch.from_numpy(segm.astype(np.int)).long()
 
         batch_segms = torch.unsqueeze(segm, 0)
 
-        batch_segms = batch_segms - 1 # label from -1 to 149
+        batch_segms = batch_segms # label from -1 to 149
         output = dict()
         output['img_ori'] = img.copy()
-        output['img_data'] = [x.contiguous() for x in img_resized_list]
+        output['img_data'] = [x.contiguous() for x in img_list]
         output['seg_label'] = batch_segms.contiguous()
-        output['info'] = this_record['fpath_img']
+        output['info'] = this_record
         return output
 
     def __len__(self):
